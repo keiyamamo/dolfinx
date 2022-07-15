@@ -6,13 +6,13 @@
 // SPDX-License-Identifier:    LGPL-3.0-or-later
 
 #include "petsc.h"
+#include "SparsityPattern.h"
 #include "Vector.h"
 #include "utils.h"
 #include <dolfinx/common/IndexMap.h>
 #include <dolfinx/common/MPI.h>
 #include <dolfinx/common/Timer.h>
 #include <dolfinx/common/log.h>
-#include <dolfinx/la/SparsityPattern.h>
 #include <iostream>
 #include <sstream>
 
@@ -47,7 +47,7 @@ void la::petsc::error(int error_code, std::string filename,
 //-----------------------------------------------------------------------------
 std::vector<Vec>
 la::petsc::create_vectors(MPI_Comm comm,
-                          const std::vector<xtl::span<const PetscScalar>>& x)
+                          const std::vector<std::span<const PetscScalar>>& x)
 {
   std::vector<Vec> v(x.size());
   for (std::size_t i = 0; i < v.size(); ++i)
@@ -69,7 +69,7 @@ Vec la::petsc::create_vector(const dolfinx::common::IndexMap& map, int bs)
 }
 //-----------------------------------------------------------------------------
 Vec la::petsc::create_vector(MPI_Comm comm, std::array<std::int64_t, 2> range,
-                             const xtl::span<const std::int64_t>& ghosts,
+                             const std::span<const std::int64_t>& ghosts,
                              int bs)
 {
   PetscErrorCode ierr;
@@ -89,7 +89,7 @@ Vec la::petsc::create_vector(MPI_Comm comm, std::array<std::int64_t, 2> range,
 }
 //-----------------------------------------------------------------------------
 Vec la::petsc::create_vector_wrap(const common::IndexMap& map, int bs,
-                                  const xtl::span<const PetscScalar>& x)
+                                  const std::span<const PetscScalar>& x)
 {
   const std::int32_t size_local = bs * map.size_local();
   const std::int64_t size_global = bs * map.size_global();
@@ -137,7 +137,7 @@ std::vector<std::vector<PetscScalar>> la::petsc::get_local_vectors(
   VecGetSize(x_local, &n);
   const PetscScalar* array = nullptr;
   VecGetArrayRead(x_local, &array);
-  xtl::span _x(array, n);
+  std::span _x(array, n);
 
   // Copy PETSc Vec data in to local vectors
   std::vector<std::vector<PetscScalar>> x_b;
@@ -164,7 +164,7 @@ std::vector<std::vector<PetscScalar>> la::petsc::get_local_vectors(
 }
 //-----------------------------------------------------------------------------
 void la::petsc::scatter_local_vectors(
-    Vec x, const std::vector<xtl::span<const PetscScalar>>& x_b,
+    Vec x, const std::vector<std::span<const PetscScalar>>& x_b,
     const std::vector<
         std::pair<std::reference_wrapper<const common::IndexMap>, int>>& maps)
 {
@@ -182,7 +182,7 @@ void la::petsc::scatter_local_vectors(
   VecGetSize(x_local, &n);
   PetscScalar* array = nullptr;
   VecGetArray(x_local, &array);
-  xtl::span _x(array, n);
+  std::span _x(array, n);
 
   // Copy local vectors into PETSc Vec
   int offset = 0;
@@ -234,12 +234,6 @@ Mat la::petsc::create_matrix(MPI_Comm comm,
   if (ierr != 0)
     petsc::error(ierr, __FILE__, "MatSetSizes");
 
-  // Get number of nonzeros for each row from sparsity pattern
-  const graph::AdjacencyList<std::int32_t>& diagonal_pattern
-      = sp.diagonal_pattern();
-  const graph::AdjacencyList<std::int32_t>& off_diagonal_pattern
-      = sp.off_diagonal_pattern();
-
   // Apply PETSc options from the options database to the matrix (this
   // includes changing the matrix type to one specified by the user)
   ierr = MatSetFromOptions(A);
@@ -256,9 +250,9 @@ Mat la::petsc::create_matrix(MPI_Comm comm,
     _nnz_diag.resize(maps[0]->size_local());
     _nnz_offdiag.resize(maps[0]->size_local());
     for (std::size_t i = 0; i < _nnz_diag.size(); ++i)
-      _nnz_diag[i] = diagonal_pattern.links(i).size();
+      _nnz_diag[i] = sp.nnz_diag(i);
     for (std::size_t i = 0; i < _nnz_offdiag.size(); ++i)
-      _nnz_offdiag[i] = off_diagonal_pattern.links(i).size();
+      _nnz_offdiag[i] = sp.nnz_off_diag(i);
   }
   else
   {
@@ -266,9 +260,9 @@ Mat la::petsc::create_matrix(MPI_Comm comm,
     _nnz_diag.resize(maps[0]->size_local() * bs[0]);
     _nnz_offdiag.resize(maps[0]->size_local() * bs[0]);
     for (std::size_t i = 0; i < _nnz_diag.size(); ++i)
-      _nnz_diag[i] = bs[1] * diagonal_pattern.links(i / bs[0]).size();
+      _nnz_diag[i] = bs[1] * sp.nnz_diag(i / bs[0]);
     for (std::size_t i = 0; i < _nnz_offdiag.size(); ++i)
-      _nnz_offdiag[i] = bs[1] * off_diagonal_pattern.links(i / bs[0]).size();
+      _nnz_offdiag[i] = bs[1] * sp.nnz_off_diag(i / bs[0]);
   }
 
   // Allocate space for matrix
@@ -341,7 +335,7 @@ Mat la::petsc::create_matrix(MPI_Comm comm,
 }
 //-----------------------------------------------------------------------------
 MatNullSpace la::petsc::create_nullspace(MPI_Comm comm,
-                                         const xtl::span<const Vec>& basis)
+                                         const std::span<const Vec>& basis)
 {
   MatNullSpace ns = nullptr;
   PetscErrorCode ierr
@@ -542,92 +536,6 @@ Vec petsc::Operator::create_vector(std::size_t dim) const
 //-----------------------------------------------------------------------------
 Mat petsc::Operator::mat() const { return _matA; }
 //-----------------------------------------------------------------------------
-//-----------------------------------------------------------------------------
-std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                  const std::int32_t*, const PetscScalar*)>
-petsc::Matrix::set_fn(Mat A, InsertMode mode)
-{
-  return [A, mode, cache = std::vector<PetscInt>()](
-             std::int32_t m, const std::int32_t* rows, std::int32_t n,
-             const std::int32_t* cols, const PetscScalar* vals) mutable -> int
-  {
-    PetscErrorCode ierr;
-#ifdef PETSC_USE_64BIT_INDICES
-    cache.resize(m + n);
-    std::copy_n(rows, m, cache.begin());
-    std::copy_n(cols, n, std::next(cache.begin(), m));
-    const PetscInt *_rows = cache.data(), *_cols = _rows + m;
-    ierr = MatSetValuesLocal(A, m, _rows, n, _cols, vals, mode);
-#else
-    ierr = MatSetValuesLocal(A, m, rows, n, cols, vals, mode);
-#endif
-
-#ifdef DEBUG
-    if (ierr != 0)
-      petsc::error(ierr, __FILE__, "MatSetValuesLocal");
-#endif
-    return ierr;
-  };
-}
-//-----------------------------------------------------------------------------
-std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                  const std::int32_t*, const PetscScalar*)>
-petsc::Matrix::set_block_fn(Mat A, InsertMode mode)
-{
-  return [A, mode, cache = std::vector<PetscInt>()](
-             std::int32_t m, const std::int32_t* rows, std::int32_t n,
-             const std::int32_t* cols, const PetscScalar* vals) mutable -> int
-  {
-    PetscErrorCode ierr;
-#ifdef PETSC_USE_64BIT_INDICES
-    cache.resize(m + n);
-    std::copy_n(rows, m, cache.begin());
-    std::copy_n(cols, n, std::next(cache.begin(), m));
-    const PetscInt *_rows = cache.data(), *_cols = _rows + m;
-    ierr = MatSetValuesBlockedLocal(A, m, _rows, n, _cols, vals, mode);
-#else
-    ierr = MatSetValuesBlockedLocal(A, m, rows, n, cols, vals, mode);
-#endif
-
-#ifdef DEBUG
-    if (ierr != 0)
-      petsc::error(ierr, __FILE__, "MatSetValuesBlockedLocal");
-#endif
-    return ierr;
-  };
-}
-//-----------------------------------------------------------------------------
-std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                  const std::int32_t*, const PetscScalar*)>
-petsc::Matrix::set_block_expand_fn(Mat A, int bs0, int bs1, InsertMode mode)
-{
-  if (bs0 == 1 and bs1 == 1)
-    return set_fn(A, mode);
-
-  return [A, bs0, bs1, mode, cache0 = std::vector<PetscInt>(),
-          cache1 = std::vector<PetscInt>()](
-             std::int32_t m, const std::int32_t* rows, std::int32_t n,
-             const std::int32_t* cols, const PetscScalar* vals) mutable -> int
-  {
-    PetscErrorCode ierr;
-    cache0.resize(bs0 * m);
-    cache1.resize(bs1 * n);
-    for (std::int32_t i = 0; i < m; ++i)
-      for (int k = 0; k < bs0; ++k)
-        cache0[bs0 * i + k] = bs0 * rows[i] + k;
-    for (std::int32_t i = 0; i < n; ++i)
-      for (int k = 0; k < bs1; ++k)
-        cache1[bs1 * i + k] = bs1 * cols[i] + k;
-
-    ierr = MatSetValuesLocal(A, cache0.size(), cache0.data(), cache1.size(),
-                             cache1.data(), vals, mode);
-#ifdef DEBUG
-    if (ierr != 0)
-      petsc::error(ierr, __FILE__, "MatSetValuesLocal");
-#endif
-    return ierr;
-  };
-}
 //-----------------------------------------------------------------------------
 petsc::Matrix::Matrix(MPI_Comm comm, const SparsityPattern& sp,
                       const std::string& type)

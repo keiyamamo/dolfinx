@@ -11,8 +11,8 @@
 #include "assemble_vector_impl.h"
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <vector>
-#include <xtl/xspan.hpp>
 
 namespace dolfinx::fem
 {
@@ -24,16 +24,15 @@ class FunctionSpace;
 
 // -- Helper functions -----------------------------------------------------
 
-/// Makes the std::vectors of coefficients in the coefficient map into
-/// xtl::spans
+/// @brief Create a map std::span from a map of std::vector
 template <typename T>
 std::map<std::pair<dolfinx::fem::IntegralType, int>,
-         std::pair<xtl::span<const T>, int>>
+         std::pair<std::span<const T>, int>>
 make_coefficients_span(const std::map<std::pair<IntegralType, int>,
                                       std::pair<std::vector<T>, int>>& coeffs)
 {
   using Key = typename std::remove_reference_t<decltype(coeffs)>::key_type;
-  std::map<Key, std::pair<xtl::span<const T>, int>> c;
+  std::map<Key, std::pair<std::span<const T>, int>> c;
   std::transform(coeffs.cbegin(), coeffs.cend(), std::inserter(c, c.end()),
                  [](auto& e) -> typename decltype(c)::value_type {
                    return {e.first, {e.second.first, e.second.second}};
@@ -54,9 +53,9 @@ make_coefficients_span(const std::map<std::pair<IntegralType, int>,
 /// process
 template <typename T>
 T assemble_scalar(
-    const Form<T>& M, const xtl::span<const T>& constants,
+    const Form<T>& M, const std::span<const T>& constants,
     const std::map<std::pair<IntegralType, int>,
-                   std::pair<xtl::span<const T>, int>>& coefficients)
+                   std::pair<std::span<const T>, int>>& coefficients)
 {
   return impl::assemble_scalar(M, constants, coefficients);
 }
@@ -70,8 +69,9 @@ template <typename T>
 T assemble_scalar(const Form<T>& M)
 {
   const std::vector<T> constants = pack_constants(M);
-  const auto coefficients = pack_coefficients(M);
-  return assemble_scalar(M, tcb::make_span(constants),
+  auto coefficients = allocate_coefficient_storage(M);
+  pack_coefficients(M, coefficients);
+  return assemble_scalar(M, std::span(constants),
                          make_coefficients_span(coefficients));
 }
 
@@ -87,9 +87,9 @@ T assemble_scalar(const Form<T>& M)
 /// @param[in] coefficients The coefficients that appear in `L`
 template <typename T>
 void assemble_vector(
-    xtl::span<T> b, const Form<T>& L, const xtl::span<const T>& constants,
+    std::span<T> b, const Form<T>& L, const std::span<const T>& constants,
     const std::map<std::pair<IntegralType, int>,
-                   std::pair<xtl::span<const T>, int>>& coefficients)
+                   std::pair<std::span<const T>, int>>& coefficients)
 {
   impl::assemble_vector(b, L, constants, coefficients);
 }
@@ -99,11 +99,12 @@ void assemble_vector(
 /// before assembly.
 /// @param[in] L The linear forms to assemble into b
 template <typename T>
-void assemble_vector(xtl::span<T> b, const Form<T>& L)
+void assemble_vector(std::span<T> b, const Form<T>& L)
 {
-  const auto coefficients = pack_coefficients(L);
+  auto coefficients = allocate_coefficient_storage(L);
+  pack_coefficients(L, coefficients);
   const std::vector<T> constants = pack_constants(L);
-  assemble_vector(b, L, tcb::make_span(constants),
+  assemble_vector(b, L, std::span(constants),
                   make_coefficients_span(coefficients));
 }
 
@@ -127,12 +128,12 @@ void assemble_vector(xtl::span<T> b, const Form<T>& L)
 /// is responsible for calling VecGhostUpdateBegin/End.
 template <typename T>
 void apply_lifting(
-    xtl::span<T> b, const std::vector<std::shared_ptr<const Form<T>>>& a,
-    const std::vector<xtl::span<const T>>& constants,
+    std::span<T> b, const std::vector<std::shared_ptr<const Form<T>>>& a,
+    const std::vector<std::span<const T>>& constants,
     const std::vector<std::map<std::pair<IntegralType, int>,
-                               std::pair<xtl::span<const T>, int>>>& coeffs,
+                               std::pair<std::span<const T>, int>>>& coeffs,
     const std::vector<std::vector<std::shared_ptr<const DirichletBC<T>>>>& bcs1,
-    const std::vector<xtl::span<const T>>& x0, double scale)
+    const std::vector<std::span<const T>>& x0, double scale)
 {
   impl::apply_lifting(b, a, constants, coeffs, bcs1, x0, scale);
 }
@@ -151,9 +152,9 @@ void apply_lifting(
 /// is responsible for calling VecGhostUpdateBegin/End.
 template <typename T>
 void apply_lifting(
-    xtl::span<T> b, const std::vector<std::shared_ptr<const Form<T>>>& a,
+    std::span<T> b, const std::vector<std::shared_ptr<const Form<T>>>& a,
     const std::vector<std::vector<std::shared_ptr<const DirichletBC<T>>>>& bcs1,
-    const std::vector<xtl::span<const T>>& x0, double scale)
+    const std::vector<std::span<const T>>& x0, double scale)
 {
   std::vector<
       std::map<std::pair<IntegralType, int>, std::pair<std::vector<T>, int>>>
@@ -163,7 +164,9 @@ void apply_lifting(
   {
     if (_a)
     {
-      coeffs.push_back(pack_coefficients(*_a));
+      auto coefficients = allocate_coefficient_storage(*_a);
+      pack_coefficients(*_a, coefficients);
+      coeffs.push_back(coefficients);
       constants.push_back(pack_constants(*_a));
     }
     else
@@ -174,10 +177,10 @@ void apply_lifting(
     }
   }
 
-  std::vector<xtl::span<const T>> _constants(constants.begin(),
+  std::vector<std::span<const T>> _constants(constants.begin(),
                                              constants.end());
   std::vector<std::map<std::pair<IntegralType, int>,
-                       std::pair<xtl::span<const T>, int>>>
+                       std::pair<std::span<const T>, int>>>
       _coeffs;
   std::transform(coeffs.cbegin(), coeffs.cend(), std::back_inserter(_coeffs),
                  [](auto& c) { return make_coefficients_span(c); });
@@ -193,13 +196,11 @@ void apply_lifting(
 /// @param[in] coefficients Coefficients that appear in `a`
 /// @param[in] bcs Boundary conditions to apply. For boundary condition
 ///  dofs the row and column are zeroed. The diagonal  entry is not set.
-template <typename T>
+template <typename T, typename U>
 void assemble_matrix(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& mat_add,
-    const Form<T>& a, const xtl::span<const T>& constants,
+    U mat_add, const Form<T>& a, const std::span<const T>& constants,
     const std::map<std::pair<IntegralType, int>,
-                   std::pair<xtl::span<const T>, int>>& coefficients,
+                   std::pair<std::span<const T>, int>>& coefficients,
     const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs)
 {
   // Index maps for dof ranges
@@ -241,19 +242,18 @@ void assemble_matrix(
 /// @param[in] a The bilinear from to assemble
 /// @param[in] bcs Boundary conditions to apply. For boundary condition
 ///  dofs the row and column are zeroed. The diagonal  entry is not set.
-template <typename T>
+template <typename T, typename U>
 void assemble_matrix(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& mat_add,
-    const Form<T>& a,
+    U mat_add, const Form<T>& a,
     const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs)
 {
   // Prepare constants and coefficients
   const std::vector<T> constants = pack_constants(a);
-  const auto coefficients = pack_coefficients(a);
+  auto coefficients = allocate_coefficient_storage(a);
+  pack_coefficients(a, coefficients);
 
   // Assemble
-  assemble_matrix(mat_add, a, tcb::make_span(constants),
+  assemble_matrix(mat_add, a, std::span(constants),
                   make_coefficients_span(coefficients), bcs);
 }
 
@@ -269,15 +269,13 @@ void assemble_matrix(
 /// @param[in] dof_marker1 Boundary condition markers for the columns.
 /// If bc[i] is true then rows i in A will be zeroed. The index i is a
 /// local index.
-template <typename T>
+template <typename T, typename U>
 void assemble_matrix(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& mat_add,
-    const Form<T>& a, const xtl::span<const T>& constants,
+    U mat_add, const Form<T>& a, const std::span<const T>& constants,
     const std::map<std::pair<IntegralType, int>,
-                   std::pair<xtl::span<const T>, int>>& coefficients,
-    const xtl::span<const std::int8_t>& dof_marker0,
-    const xtl::span<const std::int8_t>& dof_marker1)
+                   std::pair<std::span<const T>, int>>& coefficients,
+    const std::span<const std::int8_t>& dof_marker0,
+    const std::span<const std::int8_t>& dof_marker1)
 
 {
   impl::assemble_matrix(mat_add, a, constants, coefficients, dof_marker0,
@@ -294,20 +292,19 @@ void assemble_matrix(
 /// @param[in] dof_marker1 Boundary condition markers for the columns.
 ///   If bc[i] is true then rows i in A will be zeroed. The index i is a
 ///   local index.
-template <typename T>
-void assemble_matrix(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& mat_add,
-    const Form<T>& a, const xtl::span<const std::int8_t>& dof_marker0,
-    const xtl::span<const std::int8_t>& dof_marker1)
+template <typename T, typename U>
+void assemble_matrix(U mat_add, const Form<T>& a,
+                     const std::span<const std::int8_t>& dof_marker0,
+                     const std::span<const std::int8_t>& dof_marker1)
 
 {
   // Prepare constants and coefficients
   const std::vector<T> constants = pack_constants(a);
-  const auto coefficients = pack_coefficients(a);
+  auto coefficients = allocate_coefficient_storage(a);
+  pack_coefficients(a, coefficients);
 
   // Assemble
-  assemble_matrix(mat_add, a, tcb::make_span(constants),
+  assemble_matrix(mat_add, a, std::span(constants),
                   make_coefficients_span(coefficients), dof_marker0,
                   dof_marker1);
 }
@@ -322,16 +319,14 @@ void assemble_matrix(
 /// value to the diagonal
 /// @param[in] diagonal The value to add to the diagonal for the
 ///   specified rows
-template <typename T>
-void set_diagonal(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& set_fn,
-    const xtl::span<const std::int32_t>& rows, T diagonal = 1.0)
+template <typename T, typename U>
+void set_diagonal(U set_fn, const std::span<const std::int32_t>& rows,
+                  T diagonal = 1.0)
 {
   for (std::size_t i = 0; i < rows.size(); ++i)
   {
-    const std::int32_t row = rows[i];
-    set_fn(1, &row, 1, &row, &diagonal);
+    std::span diag_span(&diagonal, 1);
+    set_fn(rows.subspan(i, 1), rows.subspan(i, 1), diag_span);
   }
 }
 
@@ -350,13 +345,10 @@ void set_diagonal(
 /// @param[in] bcs The Dirichlet boundary condtions
 /// @param[in] diagonal The value to add to the diagonal for rows with a
 ///   boundary condition applied
-template <typename T>
-void set_diagonal(
-    const std::function<int(std::int32_t, const std::int32_t*, std::int32_t,
-                            const std::int32_t*, const T*)>& set_fn,
-    const fem::FunctionSpace& V,
-    const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs,
-    T diagonal = 1.0)
+template <typename T, typename U>
+void set_diagonal(U set_fn, const fem::FunctionSpace& V,
+                  const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs,
+                  T diagonal = 1.0)
 {
   for (const auto& bc : bcs)
   {
@@ -364,7 +356,7 @@ void set_diagonal(
     if (V.contains(*bc->function_space()))
     {
       const auto [dofs, range] = bc->dof_indices();
-      set_diagonal<T>(set_fn, dofs.first(range), diagonal);
+      set_diagonal(set_fn, dofs.first(range), diagonal);
     }
   }
 }
@@ -380,9 +372,9 @@ void set_diagonal(
 /// 'scale'. The vectors b and x0 must have the same local size. The bcs
 /// should be on (sub-)spaces of the form L that b represents.
 template <typename T>
-void set_bc(xtl::span<T> b,
+void set_bc(std::span<T> b,
             const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs,
-            const xtl::span<const T>& x0, double scale = 1.0)
+            const std::span<const T>& x0, double scale = 1.0)
 {
   if (b.size() > x0.size())
     throw std::runtime_error("Size mismatch between b and x0 vectors.");
@@ -397,7 +389,7 @@ void set_bc(xtl::span<T> b,
 /// 'scale'. The bcs should be on (sub-)spaces of the form L that b
 /// represents.
 template <typename T>
-void set_bc(xtl::span<T> b,
+void set_bc(std::span<T> b,
             const std::vector<std::shared_ptr<const DirichletBC<T>>>& bcs,
             double scale = 1.0)
 {

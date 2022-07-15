@@ -8,9 +8,9 @@
 
 #include <array>
 #include <mpi.h>
+#include <span>
 #include <vector>
 #include <xtensor/xfixed.hpp>
-#include <xtl/xspan.hpp>
 
 namespace dolfinx::mesh
 {
@@ -36,7 +36,7 @@ public:
   /// @param[in] padding A float perscribing how much the bounding box
   /// of each entity should be padded
   BoundingBoxTree(const mesh::Mesh& mesh, int tdim,
-                  const xtl::span<const std::int32_t>& entities,
+                  const std::span<const std::int32_t>& entities,
                   double padding = 0);
 
   /// Constructor
@@ -78,7 +78,7 @@ public:
   /// collision with.
   /// @param[in] comm MPI Communicator for collective communication
   /// @return BoundingBoxTree where each node represents a process
-  BoundingBoxTree create_global_tree(const MPI_Comm& comm) const;
+  BoundingBoxTree create_global_tree(MPI_Comm comm) const;
 
   /// Return number of bounding boxes
   std::int32_t num_bboxes() const;

@@ -16,7 +16,6 @@ import dolfinx.pkgconfig
 from dolfinx import wrappers
 from dolfinx.jit import mpi_jit_decorator
 from dolfinx.mesh import create_unit_square
-from dolfinx_utils.test.fixtures import tempdir  # noqa: F401
 
 import mpi4py
 from mpi4py import MPI
@@ -44,7 +43,7 @@ def test_mpi_comm_wrapper_cppimport(tempdir):  # noqa: F811
 /*
 <%
 setup_pybind11(cfg)
-cfg['compiler_args'] = ['-std=c++17']
+cfg['compiler_args'] = ['-std=c++20']
 cfg['include_dirs'] += {dolfinx_pc["include_dirs"]
                         + [mpi4py.get_include()]
                         + [str(wrappers.get_include_path())]}

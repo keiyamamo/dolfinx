@@ -17,13 +17,14 @@ import cffi
 import numba
 import numba.core.typing.cffi_utils as cffi_support
 import numpy as np
+import numpy.typing
 import pytest
 
 import dolfinx
 import dolfinx.pkgconfig
 import ufl
-from dolfinx.fem import (Function, FunctionSpace, assemble_matrix,
-                         transpose_dofmap)
+from dolfinx.fem import Function, FunctionSpace, form, transpose_dofmap
+from dolfinx.fem.petsc import assemble_matrix
 from dolfinx.mesh import create_unit_square
 from ufl import dx, inner
 
@@ -47,12 +48,12 @@ index_size = np.dtype(PETSc.IntType).itemsize
 
 if index_size == 8:
     c_int_t = "int64_t"
-    ctypes_index = ctypes.c_int64
+    ctypes_index: numpy.typing.DTypeLike = ctypes.c_int64
 elif index_size == 4:
     c_int_t = "int32_t"
     ctypes_index = ctypes.c_int32
 else:
-    raise RuntimeError("Cannot translate PETSc index size into a C type, index_size: {}.".format(index_size))
+    raise RuntimeError(f"Cannot translate PETSc index size into a C type, index_size: {index_size}.")
 
 if complex and scalar_size == 16:
     c_scalar_t = "double _Complex"
@@ -68,7 +69,7 @@ elif not complex and scalar_size == 4:
     numba_scalar_t = numba.types.float32
 else:
     raise RuntimeError(
-        "Cannot translate PETSc scalar type to a C type, complex: {} size: {}.".format(complex, scalar_size))
+        f"Cannot translate PETSc scalar type to a C type, complex: {complex} size: {scalar_size}.")
 
 
 # Load PETSc library via ctypes
@@ -85,9 +86,10 @@ else:
         raise
 
 # Get the PETSc MatSetValuesLocal function via ctypes
+# ctypes does not support static types well, ignore type check errors
 MatSetValues_ctypes = petsc_lib_ctypes.MatSetValuesLocal
-MatSetValues_ctypes.argtypes = (ctypes.c_void_p, ctypes_index, ctypes.POINTER(
-    ctypes_index), ctypes_index, ctypes.POINTER(ctypes_index), ctypes.c_void_p, ctypes.c_int)
+MatSetValues_ctypes.argtypes = [ctypes.c_void_p, ctypes_index, ctypes.POINTER(  # type: ignore
+    ctypes_index), ctypes_index, ctypes.POINTER(ctypes_index), ctypes.c_void_p, ctypes.c_int]  # type: ignore
 del petsc_lib_ctypes
 
 
@@ -332,15 +334,16 @@ def test_custom_mesh_loop_rank1():
     # Test against generated code and general assembler
     v = ufl.TestFunction(V)
     L = inner(1.0, v) * dx
+    Lf = form(L)
     start = time.time()
-    b1 = dolfinx.fem.assemble_vector(L)
+    b1 = dolfinx.fem.petsc.assemble_vector(Lf)
     end = time.time()
     print("Time (C++, pass 0):", end - start)
 
     with b1.localForm() as b_local:
         b_local.set(0.0)
     start = time.time()
-    dolfinx.fem.assemble_vector(b1, L)
+    dolfinx.fem.petsc.assemble_vector(b1, Lf)
     end = time.time()
     print("Time (C++, pass 1):", end - start)
     b1.ghostUpdate(addv=PETSc.InsertMode.ADD, mode=PETSc.ScatterMode.REVERSE)
@@ -349,12 +352,12 @@ def test_custom_mesh_loop_rank1():
     # Assemble using generated tabulate_tensor kernel and Numba assembler
     ffcxtype = "double _Complex" if np.issubdtype(PETSc.ScalarType, np.complexfloating) else "double"
     b3 = Function(V)
-    ufc_form, module, code = dolfinx.jit.ffcx_jit(
-        mesh.comm, L, form_compiler_parameters={"scalar_type": ffcxtype})
+    ufcx_form, module, code = dolfinx.jit.ffcx_jit(
+        mesh.comm, L, form_compiler_params={"scalar_type": ffcxtype})
 
     nptype = "complex128" if np.issubdtype(PETSc.ScalarType, np.complexfloating) else "float64"
     # First 0 for "cell" integrals, second 0 for the first one, i.e. default domain
-    kernel = getattr(ufc_form.integrals(0)[0], f"tabulate_tensor_{nptype}")
+    kernel = getattr(ufcx_form.integrals(0)[0], f"tabulate_tensor_{nptype}")
 
     for i in range(2):
         b = b3.x.array
@@ -383,13 +386,13 @@ def test_custom_mesh_loop_ctypes_rank2():
 
     # Generated case with general assembler
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    a = inner(u, v) * dx
+    a = form(inner(u, v) * dx)
     A0 = assemble_matrix(a)
     A0.assemble()
     A0.zeroEntries()
 
     start = time.time()
-    dolfinx.fem.assemble_matrix(A0, a)
+    dolfinx.fem.petsc.assemble_matrix(A0, a)
     end = time.time()
     print("Time (C++, pass 2):", end - start)
     A0.assemble()
@@ -418,7 +421,7 @@ def test_custom_mesh_loop_cffi_rank2(set_vals):
 
     # Test against generated code and general assembler
     u, v = ufl.TrialFunction(V), ufl.TestFunction(V)
-    a = inner(u, v) * dx
+    a = form(inner(u, v) * dx)
     A0 = assemble_matrix(a)
     A0.assemble()
 

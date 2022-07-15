@@ -11,8 +11,10 @@
 #include <chrono>
 #include <cstdint>
 #include <dolfinx/common/log.h>
+#include <filesystem>
 #include <hdf5.h>
 #include <mpi.h>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -30,7 +32,7 @@ public:
   /// @param[in] filename Name of the HDF5 file to open
   /// @param[in] mode Mode in which to open the file (w, r, a)
   /// @param[in] use_mpi_io True if MPI-IO should be used
-  static hid_t open_file(MPI_Comm comm, const std::string& filename,
+  static hid_t open_file(MPI_Comm comm, const std::filesystem::path& filename,
                          const std::string& mode, const bool use_mpi_io);
 
   /// Close HDF5 file
@@ -44,7 +46,7 @@ public:
   /// Get filename
   /// @param[in] handle HDF5 file handle
   /// return The filename
-  static std::string get_filename(hid_t handle);
+  static std::filesystem::path get_filename(hid_t handle);
 
   /// Write data to existing HDF file as defined by range blocks on each
   /// process
@@ -349,10 +351,8 @@ HDF5Interface::read_dataset(const hid_t file_handle,
     throw std::runtime_error("Failed to create HDF5 dataspace.");
 
   // Create local data to read into
-  std::size_t data_size = 1;
-  for (std::size_t i = 0; i < count.size(); ++i)
-    data_size *= count[i];
-  std::vector<T> data(data_size);
+  std::vector<T> data(
+      std::reduce(count.begin(), count.end(), 1, std::multiplies{}));
 
   // Read data on each process
   const hid_t h5type = hdf5_type<T>();

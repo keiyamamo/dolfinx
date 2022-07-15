@@ -6,10 +6,11 @@
 
 #include "xdmf_mesh.h"
 #include "cells.h"
-#include "pugixml.hpp"
 #include "xdmf_read.h"
 #include "xdmf_utils.h"
+#include <dolfinx/common/IndexMap.h>
 #include <dolfinx/fem/ElementDofLayout.h>
+#include <pugixml.hpp>
 
 using namespace dolfinx;
 using namespace dolfinx::io;
@@ -20,7 +21,7 @@ void xdmf_mesh::add_topology_data(MPI_Comm comm, pugi::xml_node& xml_node,
                                   const std::string path_prefix,
                                   const mesh::Topology& topology,
                                   const mesh::Geometry& geometry, int dim,
-                                  const xtl::span<const std::int32_t>& entities)
+                                  const std::span<const std::int32_t>& entities)
 {
   LOG(INFO) << "Adding topology data to node \"" << xml_node.path('/') << "\"";
 
@@ -138,8 +139,7 @@ void xdmf_mesh::add_topology_data(MPI_Comm comm, pugi::xml_node& xml_node,
 
   const std::int64_t num_local = num_entities_local;
   std::int64_t offset = 0;
-  MPI_Exscan(&num_local, &offset, 1, dolfinx::MPI::mpi_type<std::int64_t>(),
-             MPI_SUM, comm);
+  MPI_Exscan(&num_local, &offset, 1, MPI_INT64_T, MPI_SUM, comm);
   const bool use_mpi_io = (dolfinx::MPI::size(comm) > 1);
   xdmf_utils::add_data_item(topology_node, h5_id, h5_path, topology_data,
                             offset, shape, number_type, use_mpi_io);
@@ -150,9 +150,7 @@ void xdmf_mesh::add_geometry_data(MPI_Comm comm, pugi::xml_node& xml_node,
                                   const std::string path_prefix,
                                   const mesh::Geometry& geometry)
 {
-
   LOG(INFO) << "Adding geometry data to node \"" << xml_node.path('/') << "\"";
-
   auto map = geometry.index_map();
   assert(map);
 
@@ -172,10 +170,11 @@ void xdmf_mesh::add_geometry_data(MPI_Comm comm, pugi::xml_node& xml_node,
   // Increase 1D to 2D because XDMF has no "X" geometry, use "XY"
   const int width = (gdim == 1) ? 2 : gdim;
 
-  xtl::span<const double> _x = geometry.x();
+  std::span<const double> _x = geometry.x();
 
   int num_values = num_points_local * width;
   std::vector<double> x(num_values, 0.0);
+
   if (width == 3)
     std::copy_n(_x.data(), num_values, x.begin());
   else
@@ -193,8 +192,7 @@ void xdmf_mesh::add_geometry_data(MPI_Comm comm, pugi::xml_node& xml_node,
 
   const std::int64_t num_local = num_points_local;
   std::int64_t offset = 0;
-  MPI_Exscan(&num_local, &offset, 1, dolfinx::MPI::mpi_type<std::int64_t>(),
-             MPI_SUM, comm);
+  MPI_Exscan(&num_local, &offset, 1, MPI_INT64_T, MPI_SUM, comm);
   const bool use_mpi_io = (dolfinx::MPI::size(comm) > 1);
   xdmf_utils::add_data_item(geometry_node, h5_id, h5_path, x, offset, shape, "",
                             use_mpi_io);
@@ -226,7 +224,7 @@ void xdmf_mesh::add_mesh(MPI_Comm comm, pugi::xml_node& xml_node,
 
   add_topology_data(comm, grid_node, h5_id, path_prefix, mesh.topology(),
                     mesh.geometry(), tdim,
-                    xtl::span<std::int32_t>(cells.data(), num_cells));
+                    std::span<std::int32_t>(cells.data(), num_cells));
 
   // Add geometry node and attributes (including writing data)
   add_geometry_data(comm, grid_node, h5_id, path_prefix, mesh.geometry());

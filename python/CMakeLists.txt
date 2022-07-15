@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.16)
 
 PROJECT(dolfinx_pybind11)
 
+# Set C++ standard before finding pybind11
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 # Development component which includes both Development.Module and
 # Development.Embed is not required for building a Python module.  Correct
 # COMPONENT specification Development.Module added only in CMake 3.18 and
@@ -11,7 +16,7 @@ if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.18.0")
 else()
   find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 endif()
-find_package(pybind11 REQUIRED CONFIG HINTS ${PYBIND11_DIR} ${PYBIND11_ROOT}
+find_package(pybind11 2.7.0 REQUIRED CONFIG HINTS ${PYBIND11_DIR} ${PYBIND11_ROOT}
   $ENV{PYBIND11_DIR} $ENV{PYBIND11_ROOT})
 
 execute_process(
@@ -35,11 +40,6 @@ get_target_property(DOLFINX_DEFN dolfinx INTERFACE_COMPILE_DEFINITIONS)
 if("XTENSOR_USE_XSIMD" IN_LIST BASIX_DEFN OR "XTENSOR_USE_XSIMD" IN_LIST DOLFINX_DEFN)
   find_package(xsimd REQUIRED)
 endif()
-
-# Set C++ standard before finding pybind11
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Create the binding library
 # pybind11 handles its own calls to target_link_libraries
